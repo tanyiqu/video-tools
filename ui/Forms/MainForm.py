@@ -55,9 +55,18 @@ class MainForm(QWidget):
         print(config._config['mode'])
         print(config._config['option'])
 
+        new_path = config._config['selected_video_path'] + '/' + '_out_' + config._config['selected_video_file_name']
         cmd = utils.generate_cmd(config._config['mode'],
                                  config._config['option'],
                                  config._config['selected_video_file_path'],
-                                 config._config['selected_video_path'] + '/' + '_out_' + config._config['selected_video_file_name'])
+                                 new_path)
+        # 执行转码
         utils.shell_exec(cmd)
+
+        # 删除旧文件
+        utils.unlink(config._config['selected_video_file_path'])
+
+        # 重命名新文件
+        utils.rename(new_path, config._config['selected_video_file_path'])
+
         pass
