@@ -1,11 +1,636 @@
-from PyQt5.QtWidgets import QWidget, QTableWidgetItem, QHeaderView, QMessageBox
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QProcess
+from PyQt5.QtWidgets import (
+    QWidget, QTableWidgetItem, QHeaderView, QMessageBox, QTableWidget, QAbstractItemView,
+    QScrollArea, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy
+)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMimeData, QSize, QRect
+from PyQt5.QtGui import QPainter, QColor, QBrush, QPen, QFont, QDrag, QPalette
 from pathlib import Path
 import re
 
 from ui.Forms.Ui_MainForm import Ui_MainForm
 import config
 import utils
+
+
+from PyQt5.QtWidgets import (
+    QWidget, QTableWidgetItem, QHeaderView, QMessageBox, QTableWidget, QAbstractItemView,
+    QScrollArea, QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QApplication, QFrame
+)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMimeData, QSize, QRect, QEvent, QPoint
+from PyQt5.QtGui import QPainter, QColor, QBrush, QPen, QFont, QDrag, QPalette, QFontMetrics
+from pathlib import Path
+import re
+
+from ui.Forms.Ui_MainForm import Ui_MainForm
+import config
+import utils
+
+
+COL_INDEX_WIDTH = 40
+COL_STATUS_WIDTH = 100
+SCROLLBAR_WIDTH = 10  # 滚动条预留宽度
+
+
+class TableRowWidget(QWidget):
+    """自定义表格行控件"""
+    drag_started = pyqtSignal(int)  # 行索引
+    clicked = pyqtSignal(int)  # 行索引
+
+    def __init__(self, file_path, row_index, parent=None):
+        super().__init__(parent)
+        self.file_path = file_path
+        self.row_index = row_index
+        self.is_selected = False
+        self._drag_start_pos = None
+        self._is_dragging = False
+        self._name_width = 0
+        self._path_width = 0
+        self._setup_ui()
+        self.setFixedHeight(26)
+        self._update_style()
+
+    def _setup_ui(self):
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.label_index = QLabel(str(self.row_index + 1))
+        self.label_index.setFixedWidth(COL_INDEX_WIDTH)
+        self.label_index.setAlignment(Qt.AlignCenter)
+
+        self.label_name = QLabel()
+        self.label_name.setWordWrap(False)
+        self.label_name.setMinimumWidth(1)
+
+        self.label_status = QLabel("待处理")
+        self.label_status.setFixedWidth(COL_STATUS_WIDTH)
+
+        self.label_path = QLabel()
+        self.label_path.setWordWrap(False)
+        self.label_path.setMinimumWidth(1)
+
+        layout.addWidget(self.label_index, 0)
+        layout.addWidget(self.label_name, 0)
+        layout.addWidget(self.label_status, 0)
+        layout.addWidget(self.label_path, 0)
+        layout.addStretch(1)
+
+        self._update_name_text()
+        self._update_path_text()
+
+    def set_column_widths(self, name_width, path_width):
+        """手动设置文件名和路径列的宽度"""
+        self._name_width = name_width
+        self._path_width = path_width
+        self.label_name.setFixedWidth(max(10, name_width))
+        self.label_path.setFixedWidth(max(10, path_width))
+        self._update_elided_text()
+
+    def _update_name_text(self):
+        name = Path(self.file_path).name
+        self.label_name.setToolTip(name)
+        self.label_name.setText(name)
+
+    def _update_path_text(self):
+        path = str(Path(self.file_path).parent)
+        self.label_path.setToolTip(path)
+        self.label_path.setText(path)
+
+    def _update_elided_text(self):
+        """根据当前宽度更新省略文本"""
+        name = Path(self.file_path).name
+        fm = QFontMetrics(self.label_name.font())
+        w = self.label_name.width()
+        if w > 0:
+            elided = fm.elidedText(name, Qt.ElideRight, max(10, w - 8))
+            self.label_name.setText(elided)
+
+        path = str(Path(self.file_path).parent)
+        fm = QFontMetrics(self.label_path.font())
+        w = self.label_path.width()
+        if w > 0:
+            elided = fm.elidedText(path, Qt.ElideRight, max(10, w - 8))
+            self.label_path.setText(elided)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_elided_text()
+
+    def _update_style(self):
+        """根据选中状态更新样式"""
+        if self.is_selected:
+            self.setStyleSheet("""
+                QWidget {
+                    background-color: #ecf5ff;
+                    border-bottom: 1px solid #d9ecff;
+                }
+            """)
+            self.label_index.setStyleSheet("background-color: transparent; color: #409eff; font-weight: bold; font-size: 12px; padding: 2px;")
+            self.label_name.setStyleSheet("background-color: transparent; color: #409eff; font-weight: bold; font-size: 12px; padding: 2px 4px;")
+            self.label_status.setStyleSheet("background-color: transparent; color: #409eff; font-size: 12px; padding: 2px 4px;")
+            self.label_path.setStyleSheet("background-color: transparent; color: #409eff; font-size: 12px; padding: 2px 4px;")
+        else:
+            self.setStyleSheet("""
+                QWidget {
+                    background-color: transparent;
+                    border-bottom: 1px solid #e4e7ed;
+                }
+                QWidget:hover {
+                    background-color: #f5f7fa;
+                }
+            """)
+            self.label_index.setStyleSheet("background-color: transparent; color: #909399; font-size: 12px; padding: 2px;")
+            self.label_name.setStyleSheet("background-color: transparent; color: #303133; font-weight: bold; font-size: 12px; padding: 2px 4px;")
+            self.label_status.setStyleSheet("background-color: transparent; color: #909399; font-size: 12px; padding: 2px 4px;")
+            self.label_path.setStyleSheet("background-color: transparent; color: #c0c4cc; font-size: 12px; padding: 2px 4px;")
+
+    def set_selected(self, selected):
+        self.is_selected = selected
+        self._update_style()
+
+    def set_status(self, text, success=True):
+        self.label_status.setText(text)
+        if success:
+            self.label_status.setStyleSheet("color: #67c23a; font-size: 12px; padding: 2px 4px;")
+        else:
+            self.label_status.setStyleSheet("color: #f56c6c; font-size: 12px; padding: 2px 4px;")
+
+    def update_index(self, new_index):
+        self.row_index = new_index
+        self.label_index.setText(str(new_index + 1))
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.pos()
+            self._is_dragging = False
+            self.clicked.emit(self.row_index)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() & Qt.LeftButton and self._drag_start_pos is not None:
+            if not self._is_dragging:
+                if (event.pos() - self._drag_start_pos).manhattanLength() > 8:
+                    self._is_dragging = True
+                    self.drag_started.emit(self.row_index)
+                    return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_pos = None
+        self._is_dragging = False
+        super().mouseReleaseEvent(event)
+
+    def enterEvent(self, event):
+        if not self.is_selected:
+            self.setStyleSheet("""
+                QWidget {
+                    background-color: #f5f7fa;
+                    border-bottom: 1px solid #e4e7ed;
+                }
+            """)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if not self.is_selected:
+            self.setStyleSheet("""
+                QWidget {
+                    background-color: transparent;
+                    border-bottom: 1px solid #e4e7ed;
+                }
+            """)
+        super().leaveEvent(event)
+
+
+class CustomTableWidget(QWidget):
+    """自定义表格控件"""
+    order_changed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rows = []
+        self._row_widgets = []
+        self._selected_index = -1
+        self._drag_index = -1
+        self._drop_indicator_pos = -1
+        self._setup_ui()
+        self.setAcceptDrops(True)
+
+    def _setup_ui(self):
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # 外层容器，统一管理边框圆角
+        container = QWidget()
+        container.setStyleSheet("""
+            QWidget {
+                border: 1px solid #dcdfe6;
+                border-radius: 8px;
+                background-color: #fafafa;
+            }
+        """)
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+
+        # 表头
+        self.header = QWidget()
+        self.header.setFixedHeight(28)
+        self.header.setStyleSheet("""
+            background-color: #409eff;
+            border-top-left-radius: 7px;
+            border-top-right-radius: 7px;
+        """)
+        self.header_layout = QHBoxLayout(self.header)
+        self.header_layout.setContentsMargins(0, 0, SCROLLBAR_WIDTH, 0)
+        self.header_layout.setSpacing(0)
+
+        self.h_index = QLabel("序号")
+        self.h_index.setFixedWidth(COL_INDEX_WIDTH)
+        self.h_index.setAlignment(Qt.AlignCenter)
+        self.h_name = QLabel("文件名")
+        self.h_name.setMinimumWidth(1)
+        self.h_status = QLabel("状态")
+        self.h_status.setFixedWidth(COL_STATUS_WIDTH)
+        self.h_path = QLabel("路径")
+        self.h_path.setMinimumWidth(1)
+
+        for label in [self.h_index, self.h_name, self.h_status, self.h_path]:
+            label.setStyleSheet("background-color: transparent; color: #ffffff; font-weight: bold; font-size: 12px; padding: 4px;")
+
+        self.header_layout.addWidget(self.h_index, 0)
+        self.header_layout.addWidget(self.h_name, 0)
+        self.header_layout.addWidget(self.h_status, 0)
+        self.header_layout.addWidget(self.h_path, 0)
+        self.header_layout.addStretch(1)
+
+        container_layout.addWidget(self.header)
+
+        # 滚动区域
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.NoFrame)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll_area.setAcceptDrops(True)
+        self.scroll_area.setStyleSheet("""
+            QScrollArea {
+                border: none;
+                background-color: #fafafa;
+            }
+            QScrollBar:vertical {
+                border: none;
+                width: 8px;
+                background: #f5f7fa;
+                margin: 2px;
+            }
+            QScrollBar::handle:vertical {
+                background: #c0c4cc;
+                border-radius: 4px;
+                min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #909399;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar:horizontal {
+                height: 0px;
+            }
+        """)
+
+        # 内容容器
+        self.content_widget = QWidget()
+        self.content_widget.setStyleSheet("background-color: #fafafa;")
+        self.content_widget.setAcceptDrops(True)
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setSpacing(0)
+        self.content_layout.addStretch(1)
+
+        self.scroll_area.setWidget(self.content_widget)
+        container_layout.addWidget(self.scroll_area, 1)
+
+        main_layout.addWidget(container)
+
+        # 安装事件过滤器，确保拖拽事件传递到本表控件
+        self.scroll_area.installEventFilter(self)
+        self.scroll_area.viewport().installEventFilter(self)
+        self.content_widget.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.DragEnter, QEvent.DragMove, QEvent.DragLeave, QEvent.Drop):
+            if event.mimeData().hasText() and event.mimeData().text().startswith("row:"):
+                # 转换坐标到本表控件坐标系
+                global_pos = event.pos()
+                if hasattr(obj, 'mapTo'):
+                    global_pos = obj.mapTo(self, event.pos())
+                else:
+                    global_pos = event.pos()
+
+                # 创建一个带转换后坐标的事件
+                fake_pos = global_pos
+
+                if event.type() == QEvent.DragEnter:
+                    event.acceptProposedAction()
+                    self._drop_indicator_pos = self._calc_drop_target(fake_pos)
+                    self.update()
+                    return True
+                elif event.type() == QEvent.DragMove:
+                    event.acceptProposedAction()
+                    target_row = self._calc_drop_target(fake_pos)
+                    if target_row != self._drop_indicator_pos:
+                        self._drop_indicator_pos = target_row
+                        self.update()
+                    return True
+                elif event.type() == QEvent.DragLeave:
+                    self._drop_indicator_pos = -1
+                    self.update()
+                    return True
+                elif event.type() == QEvent.Drop:
+                    self._handle_drop(event, fake_pos)
+                    return True
+        return super().eventFilter(obj, event)
+
+    def _handle_drop(self, event, pos):
+        """处理放下事件"""
+        try:
+            source_row = int(event.mimeData().text().split(":")[1])
+        except (ValueError, IndexError):
+            event.ignore()
+            return
+
+        target_row = self._calc_drop_target(pos)
+
+        if source_row < 0 or source_row >= len(self._rows):
+            event.ignore()
+            return
+
+        if target_row < 0:
+            target_row = 0
+        if target_row > len(self._rows):
+            target_row = len(self._rows)
+
+        # 计算实际插入位置
+        insert_pos = target_row
+        if insert_pos > source_row:
+            insert_pos -= 1
+
+        if source_row == insert_pos:
+            event.ignore()
+            return
+
+        # 移动数据
+        file_path = self._rows.pop(source_row)
+        self._rows.insert(insert_pos, file_path)
+
+        # 移动控件
+        widget = self._row_widgets.pop(source_row)
+        self._row_widgets.insert(insert_pos, widget)
+
+        # 重新排列布局
+        for i, w in enumerate(self._row_widgets):
+            w.update_index(i)
+            self.content_layout.insertWidget(i, w)
+
+        # 更新选中
+        if 0 <= self._selected_index < len(self._row_widgets):
+            self._row_widgets[self._selected_index].set_selected(False)
+
+        self._selected_index = insert_pos
+        self._row_widgets[insert_pos].set_selected(True)
+
+        self._drop_indicator_pos = -1
+        self.update()
+        event.acceptProposedAction()
+        self.order_changed.emit()
+
+    def start_row_drag(self, row_index):
+        """由行控件调用，开始拖拽"""
+        self._drag_index = row_index
+        drag = QDrag(self)
+        mime_data = QMimeData()
+        mime_data.setText(f"row:{row_index}")
+        drag.setMimeData(mime_data)
+        drag.exec_(Qt.MoveAction)
+        self._drag_index = -1
+        self._drop_indicator_pos = -1
+        self.update()
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasText() and event.mimeData().text().startswith("row:"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasText() and event.mimeData().text().startswith("row:"):
+            event.acceptProposedAction()
+            pos = event.pos()
+            target_row = self._calc_drop_target(pos)
+            if target_row != self._drop_indicator_pos:
+                self._drop_indicator_pos = target_row
+                self.update()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._drop_indicator_pos = -1
+        self.update()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        if not (event.mimeData().hasText() and event.mimeData().text().startswith("row:")):
+            event.ignore()
+            return
+
+        try:
+            source_row = int(event.mimeData().text().split(":")[1])
+        except (ValueError, IndexError):
+            event.ignore()
+            return
+
+        target_row = self._calc_drop_target(event.pos())
+
+        if source_row < 0 or source_row >= len(self._rows):
+            event.ignore()
+            return
+
+        if target_row < 0:
+            target_row = len(self._rows)
+
+        if target_row > len(self._rows):
+            target_row = len(self._rows)
+
+        # 计算实际插入位置
+        insert_pos = target_row
+        if insert_pos > source_row:
+            insert_pos -= 1
+
+        if source_row == insert_pos:
+            event.ignore()
+            return
+
+        # 移动数据
+        file_path = self._rows.pop(source_row)
+        self._rows.insert(insert_pos, file_path)
+
+        # 移动控件
+        widget = self._row_widgets.pop(source_row)
+        self._row_widgets.insert(insert_pos, widget)
+
+        # 重新排列布局
+        for i, w in enumerate(self._row_widgets):
+            w.update_index(i)
+            self.content_layout.insertWidget(i, w)
+
+        # 更新选中
+        if 0 <= self._selected_index < len(self._row_widgets):
+            self._row_widgets[self._selected_index].set_selected(False)
+
+        self._selected_index = insert_pos
+        self._row_widgets[insert_pos].set_selected(True)
+
+        self._drop_indicator_pos = -1
+        self.update()
+        event.acceptProposedAction()
+        self.order_changed.emit()
+
+    def _calc_drop_target(self, pos):
+        """计算拖拽目标行索引，pos 是本表控件坐标系"""
+        # 转换为内容区坐标系
+        content_pos = self.content_widget.mapFrom(self, pos)
+        scroll_offset = self.scroll_area.verticalScrollBar().value()
+        adjusted_y = content_pos.y() + scroll_offset
+
+        row_height = 26
+        if adjusted_y < 0:
+            return 0
+
+        target = adjusted_y // row_height
+
+        # 上半部分插到当前行前，下半部分插到下一行前
+        row_top = target * row_height
+        if adjusted_y - row_top > row_height // 2:
+            target += 1
+
+        return target
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._drop_indicator_pos >= 0:
+            painter = QPainter(self)
+            painter.setPen(QPen(QColor("#409eff"), 2, Qt.SolidLine))
+
+            # 计算指示器在本表控件坐标系中的位置
+            content_y = self._drop_indicator_pos * 26
+            content_y -= self.scroll_area.verticalScrollBar().value()
+            # 转换到本表坐标
+            indicator_pos = self.content_widget.mapTo(self, QPoint(0, content_y))
+            y = indicator_pos.y()
+
+            if y >= 0 and y <= self.height():
+                painter.drawLine(8, y, self.width() - 8 - SCROLLBAR_WIDTH, y)
+
+    def clear(self):
+        while self._row_widgets:
+            widget = self._row_widgets.pop()
+            widget.deleteLater()
+        self._rows.clear()
+        self._selected_index = -1
+
+    def add_row(self, file_path):
+        row_index = len(self._rows)
+        self._rows.append(file_path)
+
+        row_widget = TableRowWidget(file_path, row_index)
+        row_widget.clicked.connect(self._on_row_clicked)
+        row_widget.drag_started.connect(self.start_row_drag)
+        self._row_widgets.append(row_widget)
+
+        self.content_layout.insertWidget(len(self._row_widgets) - 1, row_widget)
+
+        # 应用当前列宽
+        self._apply_column_widths_to_row(row_widget)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_column_widths()
+
+    def _update_column_widths(self):
+        """统一计算并更新所有列的宽度"""
+        total_width = self.content_widget.width()
+        if total_width <= 0:
+            return
+
+        remaining = total_width - COL_INDEX_WIDTH - COL_STATUS_WIDTH
+        if remaining < 20:
+            remaining = 20
+
+        # 文件名占 3/7，路径占 4/7
+        name_width = int(remaining * 3 / 7)
+        path_width = remaining - name_width
+
+        # 更新表头
+        self.h_name.setFixedWidth(name_width)
+        self.h_path.setFixedWidth(path_width)
+
+        # 更新所有行
+        for row in self._row_widgets:
+            self._apply_column_widths_to_row(row, name_width, path_width)
+
+    def _apply_column_widths_to_row(self, row_widget, name_width=None, path_width=None):
+        if name_width is None or path_width is None:
+            total_width = self.content_widget.width()
+            if total_width <= 0:
+                return
+            remaining = total_width - COL_INDEX_WIDTH - COL_STATUS_WIDTH
+            if remaining < 20:
+                remaining = 20
+            name_width = int(remaining * 3 / 7)
+            path_width = remaining - name_width
+        row_widget.set_column_widths(name_width, path_width)
+
+    def remove_row(self, index):
+        if 0 <= index < len(self._rows):
+            self._rows.pop(index)
+            widget = self._row_widgets.pop(index)
+            widget.deleteLater()
+
+            for i, w in enumerate(self._row_widgets):
+                w.update_index(i)
+
+            if self._selected_index == index:
+                self._selected_index = -1
+            elif self._selected_index > index:
+                self._selected_index -= 1
+
+    def set_status(self, index, text, success=True):
+        if 0 <= index < len(self._row_widgets):
+            self._row_widgets[index].set_status(text, success)
+
+    def get_row_count(self):
+        return len(self._rows)
+
+    def get_row_data(self, index):
+        if 0 <= index < len(self._rows):
+            return self._rows[index]
+        return None
+
+    def get_all_data(self):
+        return self._rows.copy()
+
+    def _on_row_clicked(self, row_index):
+        if self._selected_index != row_index:
+            if 0 <= self._selected_index < len(self._row_widgets):
+                self._row_widgets[self._selected_index].set_selected(False)
+            self._selected_index = row_index
+            self._row_widgets[row_index].set_selected(True)
 
 
 class VideoWorker(QThread):
@@ -145,14 +770,14 @@ class VideoWorker(QThread):
             encoding='utf-8',
             errors='replace'
         )
-        
+
         duration = self._get_video_duration(input_file)
-        
+
         while True:
             line = process.stderr.readline()
             if not line and process.poll() is not None:
                 break
-            
+
             if 'time=' in line:
                 match = re.search(r'time=(\d+:\d+:\d+\.\d+)', line)
                 if match:
@@ -162,7 +787,7 @@ class VideoWorker(QThread):
                         percent = min(100, int((current_time / duration) * 100))
                         self.status_updated.emit(f"处理中... {percent}% ({time_str})")
                         self.current_progress_updated.emit(percent)
-        
+
         return process.returncode == 0
 
     def _get_video_duration(self, file_path):
@@ -196,9 +821,25 @@ class MainForm(QWidget):
         self._setup_drag_drop()
 
     def _setup_ui(self):
-        self.ui.tableWidget.setColumnWidth(0, 200)
-        self.ui.tableWidget.setColumnWidth(1, 100)
-        self.ui.tableWidget.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        # 替换 tableWidget 为自定义表格
+        old_table = self.ui.tableWidget
+        layout = old_table.parentWidget().layout()
+        index = layout.indexOf(old_table)
+
+        new_table = CustomTableWidget(self)
+        new_table.setObjectName(old_table.objectName())
+        new_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        old_table.deleteLater()
+        layout.insertWidget(index, new_table)
+        self.ui.tableWidget = new_table
+
+        # 设置各区域尺寸策略
+        self.ui.groupBox_files.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.ui.tabWidget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.ui.groupBox_progress.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.ui.groupBox_progress.setMaximumHeight(120)
+
         self.ui.lineEdit_output.setText(config.config.output_folder)
         self.ui.lineEdit_fix_output.setText(config.config.fix_output_folder)
         self.ui.lineEdit_cut_output.setText(config.config.cut_output_folder)
@@ -208,7 +849,8 @@ class MainForm(QWidget):
         self.ui.spinBox_frame.setValue(config.config.cut_frame)
         self.ui.checkBox_cut_intro_overwrite.setChecked(config.config.cut_overwrite_source)
         self._update_cut_output_visibility()
-        self.setFixedSize(self.width(), self.height())
+        self.setMinimumSize(600, 500)
+        self.resize(800, 630)
 
     def _setup_connections(self):
         self.ui.btn_add_files.clicked.connect(self._on_add_files)
@@ -228,6 +870,18 @@ class MainForm(QWidget):
 
     def _setup_drag_drop(self):
         self.setAcceptDrops(True)
+        self.ui.tableWidget.order_changed.connect(self._on_order_changed)
+
+    def _on_order_changed(self):
+        self._sync_video_files_order()
+
+    def _sync_video_files_order(self):
+        config.config.video_files = self.ui.tableWidget.get_all_data()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Delete:
+            self._on_delete_selected()
+        super().keyPressEvent(event)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -251,19 +905,7 @@ class MainForm(QWidget):
         self._update_source_format_display()
 
     def _add_file_to_table(self, file_path):
-        path = Path(file_path)
-        row = self.ui.tableWidget.rowCount()
-        self.ui.tableWidget.insertRow(row)
-
-        item_name = QTableWidgetItem(path.name)
-        item_name.setData(Qt.UserRole, file_path)
-        self.ui.tableWidget.setItem(row, 0, item_name)
-
-        item_status = QTableWidgetItem("待处理")
-        self.ui.tableWidget.setItem(row, 1, item_status)
-
-        item_path = QTableWidgetItem(str(path.parent))
-        self.ui.tableWidget.setItem(row, 2, item_path)
+        self.ui.tableWidget.add_row(file_path)
 
     def _update_source_format_display(self):
         if config.config.has_files:
@@ -289,30 +931,27 @@ class MainForm(QWidget):
         self._add_files_to_list(files)
 
     def _on_delete_selected(self):
-        selected_rows = set()
-        for item in self.ui.tableWidget.selectedItems():
-            selected_rows.add(item.row())
+        selected_index = self.ui.tableWidget._selected_index
 
-        if not selected_rows:
+        if selected_index < 0:
             QMessageBox.information(self, "提示", "请先选择要删除的视频文件")
             return
 
         reply = QMessageBox.question(
             self, "确认删除",
-            f"确定要删除选中的 {len(selected_rows)} 个视频吗？",
+            f"确定要删除选中的 1 个视频吗？",
             QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
+            QMessageBox.Yes
         )
         if reply == QMessageBox.Yes:
-            for row in sorted(selected_rows, reverse=True):
-                file_path = self.ui.tableWidget.item(row, 0).data(Qt.UserRole)
-                if file_path in config.config.video_files:
-                    config.config.video_files.remove(file_path)
-                self.ui.tableWidget.removeRow(row)
+            file_path = self.ui.tableWidget.get_row_data(selected_index)
+            if file_path and file_path in config.config.video_files:
+                config.config.video_files.remove(file_path)
+            self.ui.tableWidget.remove_row(selected_index)
             self._update_source_format_display()
 
     def _on_clear_list(self):
-        self.ui.tableWidget.setRowCount(0)
+        self.ui.tableWidget.clear()
         config.config.video_files = []
         self.ui.label_source_format.setText("未选择")
 
@@ -454,19 +1093,13 @@ class MainForm(QWidget):
         self.ui.progressBar.setValue(percent)
 
     def _on_progress_updated(self, index, status_text):
-        total = len(config.config.video_files)
-        progress = int((index / total) * 100)
+        total = self.ui.tableWidget.get_row_count()
+        progress = int((index / total) * 100) if total > 0 else 0
         self.ui.progressBar_total.setValue(progress)
         self.ui.label_status.setText(status_text)
 
     def _on_file_finished(self, index, success, status_text):
-        item = self.ui.tableWidget.item(index, 1)
-        if item:
-            item.setText(status_text)
-            if success:
-                item.setForeground(Qt.green)
-            else:
-                item.setForeground(Qt.red)
+        self.ui.tableWidget.set_status(index, status_text, success)
 
     def _on_all_finished(self):
         self.ui.progressBar.setValue(100)
@@ -483,7 +1116,6 @@ class MainForm(QWidget):
         self.ui.btn_browse_fix_output.setEnabled(enabled)
         self.ui.btn_browse_cut_output.setEnabled(enabled)
         self.ui.tabWidget.setEnabled(enabled)
-        self.ui.tableWidget.setEnabled(enabled)
         self.ui.comboBox_target.setEnabled(enabled)
         self.ui.checkBox_overwrite.setEnabled(enabled)
         self.ui.lineEdit_fix_output.setEnabled(enabled and not self.ui.checkBox_overwrite.isChecked())

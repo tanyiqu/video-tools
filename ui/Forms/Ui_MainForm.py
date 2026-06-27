@@ -45,6 +45,7 @@ class Ui_MainForm(object):
 
         self.tableWidget = QtWidgets.QTableWidget(self.groupBox_files)
         self.tableWidget.setObjectName("tableWidget")
+        self.tableWidget.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         self.tableWidget.setColumnCount(3)
         self.tableWidget.setRowCount(0)
         item = QtWidgets.QTableWidgetItem()
@@ -54,8 +55,58 @@ class Ui_MainForm(object):
         item = QtWidgets.QTableWidgetItem()
         self.tableWidget.setHorizontalHeaderItem(2, item)
         self.tableWidget.horizontalHeader().setStretchLastSection(True)
+        self.tableWidget.horizontalHeader().setDefaultSectionSize(36)
         self.tableWidget.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self.tableWidget.setAlternatingRowColors(True)
+        self.tableWidget.setAlternatingRowColors(False)
+        self.tableWidget.setShowGrid(False)
+        self.tableWidget.setStyleSheet("""
+            QTableWidget {
+                border: 1px solid #dcdfe6;
+                border-radius: 8px;
+                background-color: #fafafa;
+                padding: 4px;
+                gridline-color: #e4e7ed;
+            }
+            QTableWidget::item {
+                padding: 6px 12px;
+                border: none;
+                border-bottom: 1px solid #e4e7ed;
+            }
+            QTableWidget::item:selected {
+                background-color: #409eff;
+                color: #ffffff;
+            }
+            QHeaderView::section {
+                background-color: #409eff;
+                color: #ffffff;
+                padding: 6px 12px;
+                border: none;
+                border-radius: 0;
+                font-weight: bold;
+            }
+            QHeaderView::section:first {
+                border-top-left-radius: 8px;
+            }
+            QHeaderView::section:last {
+                border-top-right-radius: 8px;
+            }
+            QScrollBar:vertical {
+                border: none;
+                width: 8px;
+                background: #f5f7fa;
+            }
+            QScrollBar::handle:vertical {
+                background: #c0c4cc;
+                border-radius: 4px;
+                min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #909399;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
         self.verticalLayout_group.addWidget(self.tableWidget)
 
         self.verticalLayout_main.addWidget(self.groupBox_files)
@@ -261,6 +312,191 @@ class Ui_MainForm(object):
         self.retranslateUi(MainForm)
         self.tabWidget.setCurrentIndex(0)
         QtCore.QMetaObject.connectSlotsByName(MainForm)
+
+        # 全局样式
+        self._apply_global_stylesheet(MainForm)
+
+    def _apply_global_stylesheet(self, MainForm):
+        stylesheet = """
+            QWidget {
+                font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+            }
+            QGroupBox {
+                font-weight: bold;
+                border: 1px solid #dcdfe6;
+                border-radius: 8px;
+                margin-top: 10px;
+                padding-top: 10px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 15px;
+                padding: 0 5px;
+                color: #409eff;
+            }
+            QPushButton {
+                background-color: #409eff;
+                color: #ffffff;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #66b1ff;
+            }
+            QPushButton:pressed {
+                background-color: #3a8ee6;
+            }
+            QPushButton:disabled {
+                background-color: #c0c4cc;
+            }
+            QPushButton[objectName="btn_delete_selected"] {
+                background-color: #f56c6c;
+            }
+            QPushButton[objectName="btn_delete_selected"]:hover {
+                background-color: #f78989;
+            }
+            QPushButton[objectName="btn_delete_selected"]:pressed {
+                background-color: #e64242;
+            }
+            QPushButton[objectName="btn_clear_list"] {
+                background-color: #e6a23c;
+            }
+            QPushButton[objectName="btn_clear_list"]:hover {
+                background-color: #ebb563;
+            }
+            QPushButton[objectName="btn-clear_list"]:pressed {
+                background-color: #cf9236;
+            }
+            QLineEdit {
+                border: 1px solid #dcdfe6;
+                border-radius: 4px;
+                padding: 6px 12px;
+                background-color: #ffffff;
+            }
+            QLineEdit:focus {
+                border: 1px solid #409eff;
+            }
+            QLineEdit:disabled {
+                background-color: #f5f7fa;
+                color: #c0c4cc;
+            }
+            QComboBox {
+                border: 1px solid #dcdfe6;
+                border-radius: 4px;
+                padding: 6px 12px;
+                background-color: #ffffff;
+            }
+            QComboBox:focus {
+                border: 1px solid #409eff;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 24px;
+            }
+            QComboBox::down-arrow {
+                image: url(down_arrow.png);
+                width: 12px;
+                height: 12px;
+            }
+            QSpinBox {
+                border: 1px solid #dcdfe6;
+                border-radius: 4px;
+                padding: 6px 12px;
+                background-color: #ffffff;
+            }
+            QSpinBox:focus {
+                border: 1px solid #409eff;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                border: none;
+                width: 16px;
+            }
+            QCheckBox {
+                spacing: 8px;
+            }
+            QCheckBox::indicator {
+                width: 18px;
+                height: 18px;
+                border-radius: 4px;
+                border: 2px solid #dcdfe6;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #409eff;
+                border-color: #409eff;
+            }
+            QTabWidget::pane {
+                border: 1px solid #dcdfe6;
+                border-radius: 8px;
+                background-color: #ffffff;
+            }
+            QTabBar::tab {
+                background-color: #f5f7fa;
+                color: #606266;
+                padding: 10px 20px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background-color: #ffffff;
+                color: #409eff;
+                font-weight: bold;
+            }
+            QTabBar::tab:hover {
+                background-color: #ecf5ff;
+            }
+            QProgressBar {
+                border: none;
+                border-radius: 6px;
+                background-color: #e4e7ed;
+                height: 12px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background-color: #409eff;
+                border-radius: 6px;
+            }
+            QLabel {
+                color: #303133;
+            }
+            QScrollBar:vertical {
+                border: none;
+                width: 8px;
+                background: #f5f7fa;
+                margin: 0;
+            }
+            QScrollBar::handle:vertical {
+                background: #c0c4cc;
+                border-radius: 4px;
+                min-height: 30px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #909399;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar:horizontal {
+                border: none;
+                height: 8px;
+                background: #f5f7fa;
+                margin: 0;
+            }
+            QScrollBar::handle:horizontal {
+                background: #c0c4cc;
+                border-radius: 4px;
+                min-width: 30px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #909399;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+            }
+        """
+        MainForm.setStyleSheet(stylesheet)
 
     def retranslateUi(self, MainForm):
         _translate = QtCore.QCoreApplication.translate
