@@ -10,6 +10,7 @@ class VideoConfig:
     output_folder: str = ""
     fix_output_folder: str = ""
     cut_output_folder: str = ""
+    merge_output_folder: str = ""
     mode: int = 0
     option: int = 0
     overwrite_source: bool = True
@@ -33,6 +34,8 @@ class VideoConfig:
             self.fix_output_folder = self.output_folder
         if not self.cut_output_folder:
             self.cut_output_folder = self.output_folder
+        if not self.merge_output_folder:
+            self.merge_output_folder = self.output_folder
 
     @property
     def has_files(self) -> bool:

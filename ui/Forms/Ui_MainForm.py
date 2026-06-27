@@ -260,6 +260,70 @@ class Ui_MainForm(object):
         self.verticalLayout_cut_intro.addItem(spacerItem_cut)
         self.tabWidget.addTab(self.tab_cut_intro, "")
 
+        self.tab_merge = QtWidgets.QWidget()
+        self.tab_merge.setObjectName("tab_merge")
+        self.verticalLayout_merge = QtWidgets.QVBoxLayout(self.tab_merge)
+        self.verticalLayout_merge.setObjectName("verticalLayout_merge")
+
+        self.horizontalLayout_merge_format = QtWidgets.QHBoxLayout()
+        self.horizontalLayout_merge_format.setObjectName("horizontalLayout_merge_format")
+
+        self.label_merge_format = QtWidgets.QLabel(self.tab_merge)
+        self.label_merge_format.setObjectName("label_merge_format")
+        self.horizontalLayout_merge_format.addWidget(self.label_merge_format)
+
+        self.comboBox_merge_format = QtWidgets.QComboBox(self.tab_merge)
+        self.comboBox_merge_format.setObjectName("comboBox_merge_format")
+        self.comboBox_merge_format.addItem("")
+        self.comboBox_merge_format.addItem("")
+        self.comboBox_merge_format.addItem("")
+        self.comboBox_merge_format.addItem("")
+        self.horizontalLayout_merge_format.addWidget(self.comboBox_merge_format)
+
+        spacerItem_merge_format = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+        self.horizontalLayout_merge_format.addItem(spacerItem_merge_format)
+        self.verticalLayout_merge.addLayout(self.horizontalLayout_merge_format)
+
+        self.horizontalLayout_merge_filename = QtWidgets.QHBoxLayout()
+        self.horizontalLayout_merge_filename.setObjectName("horizontalLayout_merge_filename")
+
+        self.label_merge_filename = QtWidgets.QLabel(self.tab_merge)
+        self.label_merge_filename.setObjectName("label_merge_filename")
+        self.horizontalLayout_merge_filename.addWidget(self.label_merge_filename)
+
+        self.lineEdit_merge_filename = QtWidgets.QLineEdit(self.tab_merge)
+        self.lineEdit_merge_filename.setObjectName("lineEdit_merge_filename")
+        self.horizontalLayout_merge_filename.addWidget(self.lineEdit_merge_filename)
+
+        spacerItem_merge_filename = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
+        self.horizontalLayout_merge_filename.addItem(spacerItem_merge_filename)
+        self.verticalLayout_merge.addLayout(self.horizontalLayout_merge_filename)
+
+        self.horizontalLayout_merge_output = QtWidgets.QHBoxLayout()
+        self.horizontalLayout_merge_output.setObjectName("horizontalLayout_merge_output")
+
+        self.label_merge_output = QtWidgets.QLabel(self.tab_merge)
+        self.label_merge_output.setObjectName("label_merge_output")
+        self.horizontalLayout_merge_output.addWidget(self.label_merge_output)
+
+        self.lineEdit_merge_output = QtWidgets.QLineEdit(self.tab_merge)
+        self.lineEdit_merge_output.setObjectName("lineEdit_merge_output")
+        self.horizontalLayout_merge_output.addWidget(self.lineEdit_merge_output)
+
+        self.btn_browse_merge_output = QtWidgets.QPushButton(self.tab_merge)
+        self.btn_browse_merge_output.setObjectName("btn_browse_merge_output")
+        self.horizontalLayout_merge_output.addWidget(self.btn_browse_merge_output)
+
+        self.verticalLayout_merge.addLayout(self.horizontalLayout_merge_output)
+
+        self.checkBox_merge_gpu = QtWidgets.QCheckBox(self.tab_merge)
+        self.checkBox_merge_gpu.setObjectName("checkBox_merge_gpu")
+        self.verticalLayout_merge.addWidget(self.checkBox_merge_gpu)
+
+        spacerItem_merge = QtWidgets.QSpacerItem(20, 40, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding)
+        self.verticalLayout_merge.addItem(spacerItem_merge)
+        self.tabWidget.addTab(self.tab_merge, "")
+
         self.verticalLayout_main.addWidget(self.tabWidget)
 
         self.groupBox_progress = QtWidgets.QGroupBox(MainForm)
@@ -297,6 +361,16 @@ class Ui_MainForm(object):
 
         spacerItem_start = QtWidgets.QSpacerItem(40, 20, QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Minimum)
         self.horizontalLayout_start.addItem(spacerItem_start)
+
+        self.btn_stop = QtWidgets.QPushButton(MainForm)
+        sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        sizePolicy.setHorizontalStretch(0)
+        sizePolicy.setVerticalStretch(0)
+        sizePolicy.setHeightForWidth(self.btn_stop.sizePolicy().hasHeightForWidth())
+        self.btn_stop.setSizePolicy(sizePolicy)
+        self.btn_stop.setMinimumSize(QtCore.QSize(120, 40))
+        self.btn_stop.setObjectName("btn_stop")
+        self.horizontalLayout_start.addWidget(self.btn_stop)
 
         self.btn_start = QtWidgets.QPushButton(MainForm)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
@@ -530,6 +604,18 @@ class Ui_MainForm(object):
         self.label_cut_output.setText(_translate("MainForm", "输出文件夹:"))
         self.btn_browse_cut_output.setText(_translate("MainForm", "浏览..."))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_cut_intro), _translate("MainForm", "去除片头"))
+        self.label_merge_format.setText(_translate("MainForm", "输出格式:"))
+        self.comboBox_merge_format.setItemText(0, _translate("MainForm", "MP4"))
+        self.comboBox_merge_format.setItemText(1, _translate("MainForm", "TS"))
+        self.comboBox_merge_format.setItemText(2, _translate("MainForm", "FLV"))
+        self.comboBox_merge_format.setItemText(3, _translate("MainForm", "MKV"))
+        self.label_merge_filename.setText(_translate("MainForm", "输出文件名:"))
+        self.lineEdit_merge_filename.setText(_translate("MainForm", "合并视频"))
+        self.label_merge_output.setText(_translate("MainForm", "输出文件夹:"))
+        self.btn_browse_merge_output.setText(_translate("MainForm", "浏览..."))
+        self.checkBox_merge_gpu.setText(_translate("MainForm", "使用NVIDIA GPU加速（需要NVIDIA显卡）"))
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_merge), _translate("MainForm", "合并视频"))
         self.groupBox_progress.setTitle(_translate("MainForm", "处理进度"))
         self.label_status.setText(_translate("MainForm", "就绪"))
         self.btn_start.setText(_translate("MainForm", "开始处理"))
+        self.btn_stop.setText(_translate("MainForm", "停止任务"))

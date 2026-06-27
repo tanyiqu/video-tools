@@ -6,6 +6,9 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QMimeData, QSize, QRect
 from PyQt5.QtGui import QPainter, QColor, QBrush, QPen, QFont, QDrag, QPalette
 from pathlib import Path
 import re
+import sys
+import time
+import os
 
 from ui.Forms.Ui_MainForm import Ui_MainForm
 import config
@@ -641,7 +644,8 @@ class VideoWorker(QThread):
     current_progress_updated = pyqtSignal(int)
 
     def __init__(self, files, mode, target_format, output_folder, overwrite_source, fix_output_folder,
-                 cut_hour=0, cut_minute=0, cut_second=0, cut_frame=0, cut_overwrite_source=False, cut_output_folder=""):
+                 cut_hour=0, cut_minute=0, cut_second=0, cut_frame=0, cut_overwrite_source=False, cut_output_folder="",
+                 merge_filename="合并视频", merge_format="MP4", merge_output_folder="", merge_use_gpu=False):
         super().__init__()
         self.files = files
         self.mode = mode
@@ -655,10 +659,34 @@ class VideoWorker(QThread):
         self.cut_frame = cut_frame
         self.cut_overwrite_source = cut_overwrite_source
         self.cut_output_folder = cut_output_folder
+        self.merge_filename = merge_filename
+        self.merge_format = merge_format
+        self.merge_output_folder = merge_output_folder
+        self.merge_use_gpu = merge_use_gpu
+        self._is_running = True
+        self._current_process = None
+
+    def stop(self):
+        """停止当前任务"""
+        print("[Stop] 收到停止请求，设置停止标志...")
+        self._is_running = False
+        if self._current_process:
+            print(f"[Stop] 正在终止进程 PID={self._current_process.pid}...")
+            self._terminate_process(self._current_process)
+            print("[Stop] 进程终止命令已发送")
+        else:
+            print("[Stop] 当前没有运行中的进程")
 
     def run(self):
+        if self.mode == 3:
+            # 合并模式：所有文件作为整体处理
+            self._process_merge()
+            return
+
         total = len(self.files)
         for i, file_path in enumerate(self.files):
+            if not self._is_running:
+                break
             self.progress_updated.emit(i, f"处理中: {Path(file_path).name}")
 
             try:
@@ -667,6 +695,389 @@ class VideoWorker(QThread):
             except Exception as e:
                 print(f"Error processing {file_path}: {e}")
                 self.file_finished.emit(i, False, f"错误: {str(e)}")
+
+        self.all_finished.emit()
+
+    def _run_ffmpeg_cmd(self, cmd, duration, progress_prefix="处理中"):
+        """执行FFmpeg命令，支持停止，返回 (success, stderr_lines)
+        
+        Args:
+            cmd: FFmpeg命令
+            duration: 总时长（秒），用于计算进度
+            progress_prefix: 进度提示前缀
+        Returns:
+            (success, stderr_lines)
+        """
+        import subprocess
+        import threading
+        import time
+
+        process = subprocess.Popen(
+            cmd,
+            shell=True,
+            stderr=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            encoding='utf-8',
+            errors='replace'
+        )
+        self._current_process = process
+
+        last_percent = 0
+        stderr_lines = []
+        stderr_lock = threading.Lock()
+
+        def read_stderr():
+            try:
+                for line in process.stderr:
+                    with stderr_lock:
+                        stderr_lines.append(line.strip())
+            except:
+                pass
+
+        # 启动线程读取 stderr
+        reader_thread = threading.Thread(target=read_stderr, daemon=True)
+        reader_thread.start()
+
+        while True:
+            # 检查停止标志
+            if not self._is_running:
+                self._terminate_process(process)
+                reader_thread.join(timeout=1)
+                break
+
+            # 检查进程是否结束
+            if process.poll() is not None:
+                reader_thread.join(timeout=1)
+                break
+
+            # 解析进度（从已读取的行中）
+            with stderr_lock:
+                for line in stderr_lines:
+                    if 'time=' in line and duration > 0 and last_percent < 99:
+                        try:
+                            time_str = line.split('time=')[1].split()[0]
+                            parts = time_str.split(':')
+                            if len(parts) == 3:
+                                current_time = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+                            elif len(parts) == 2:
+                                current_time = float(parts[0]) * 60 + float(parts[1])
+                            else:
+                                current_time = float(parts[0])
+                            
+                            percent = min(int((current_time / duration) * 100), 99)
+                            if percent > last_percent:
+                                last_percent = percent
+                                self.current_progress_updated.emit(percent)
+                                self.progress_updated.emit(percent, f"{progress_prefix} ({percent}%)")
+                        except (ValueError, IndexError):
+                            pass
+
+            time.sleep(0.1)
+
+        self._current_process = None
+        # 再次确保进程终止
+        if process.poll() is None:
+            self._terminate_process(process)
+        
+        # 等待线程结束
+        reader_thread.join(timeout=1)
+        
+        success = process.returncode == 0 and self._is_running
+        return success, stderr_lines
+
+    def _terminate_process(self, process):
+        """安全终止进程（Windows 下处理 shell=True 的子进程问题）"""
+        print(f"[Terminate] 开始终止进程 PID={process.pid}")
+        try:
+            if sys.platform == 'win32':
+                # Windows 下 shell=True 时，terminate 只杀 cmd.exe，不杀 ffmpeg
+                # 使用 taskkill 递归杀死整个进程树
+                try:
+                    import subprocess as sp
+                    result = sp.run(
+                        ['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    print(f"[Terminate] taskkill 返回码: {result.returncode}")
+                    if result.stdout:
+                        print(f"[Terminate] taskkill stdout: {result.stdout.strip()}")
+                    if result.stderr:
+                        print(f"[Terminate] taskkill stderr: {result.stderr.strip()}")
+                except Exception as e:
+                    print(f"[Terminate] taskkill 异常: {e}")
+                    try:
+                        process.terminate()
+                    except:
+                        pass
+            else:
+                try:
+                    process.terminate()
+                except:
+                    pass
+        except Exception as e:
+            print(f"[Terminate] 终止异常: {e}")
+        
+        time.sleep(0.5)
+        
+        try:
+            if process.poll() is None:
+                print("[Terminate] 进程仍在运行，尝试再次终止...")
+                if sys.platform == 'win32':
+                    try:
+                        import subprocess as sp
+                        result = sp.run(
+                            ['taskkill', '/F', '/T', '/PID', str(process.pid)],
+                            capture_output=True,
+                            text=True,
+                            timeout=5
+                        )
+                        print(f"[Terminate] 第二次 taskkill 返回码: {result.returncode}")
+                    except Exception as e:
+                        print(f"[Terminate] 第二次 taskkill 异常: {e}")
+                        try:
+                            process.kill()
+                        except:
+                            pass
+                else:
+                    try:
+                        process.kill()
+                    except:
+                        pass
+        except Exception as e:
+            print(f"[Terminate] 二次终止异常: {e}")
+        
+        time.sleep(0.2)
+        try:
+            if process.poll() is not None:
+                print(f"[Terminate] 进程已终止，返回码: {process.returncode}")
+            else:
+                print("[Terminate] 警告: 进程仍未终止")
+        except:
+            pass
+
+    def _process_merge(self):
+        """处理合并视频"""
+        self.status_updated.emit("正在合并视频...")
+
+        input_files = self.files
+        if not input_files:
+            self.status_updated.emit("没有可合并的视频文件！")
+            self.all_finished.emit()
+            return
+
+        output_dir = Path(self.merge_output_folder) if self.merge_output_folder else Path(self.output_folder)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_ext = self.merge_format.lower()
+        output_path = str(output_dir / f"{self.merge_filename}.{output_ext}")
+
+        if Path(output_path).exists():
+            Path(output_path).unlink()
+
+        self.progress_updated.emit(0, f"正在合并 {len(input_files)} 个视频...")
+
+        import subprocess
+
+        # 检查 GPU 是否可用
+        actual_use_gpu = self.merge_use_gpu
+        if self.merge_use_gpu:
+            gpu_available, gpu_msg = utils.FFmpegCommand.check_gpu_available()
+            if not gpu_available:
+                print(f"[Merge] GPU 加速不可用: {gpu_msg}")
+                print(f"[Merge] 自动回退到软件编码 (libx264)")
+                self.status_updated.emit(f"GPU加速不可用（{gpu_msg}），使用软件编码...")
+                actual_use_gpu = False
+
+        # GPU模式下使用两步法：先转码为统一规格的TS，再合并
+        if actual_use_gpu:
+            # ========== 第一步：将每个视频转码为统一规格的临时TS文件 ==========
+            temp_dir = str(output_dir)
+            step1_results = utils.FFmpegCommand.merge_videos_safe_step1(
+                input_files, temp_dir, actual_use_gpu
+            )
+            
+            temp_files = []
+            all_success = True
+            
+            for i, (temp_file, cmd, has_audio) in enumerate(step1_results):
+                if not self._is_running:
+                    break
+                self.status_updated.emit(f"准备中: 转码第 {i+1}/{len(step1_results)} 个视频...")
+                self.progress_updated.emit(0, f"转码中: 第 {i+1}/{len(step1_results)} 个视频")
+                
+                print(f"[Merge Step1] 处理第 {i+1} 个视频: {Path(input_files[i]).name}")
+                print(f"[Merge Step1] 有音频流: {has_audio}")
+                print(f"[Merge Step1] 命令: {cmd}")
+                
+                file_duration = self._get_video_duration(input_files[i])
+                success, stderr_lines = self._run_ffmpeg_cmd(
+                    cmd, file_duration, f"转码中: 第 {i+1}/{len(step1_results)} 个视频"
+                )
+                
+                if not success:
+                    all_success = False
+                    if self._is_running:
+                        print(f"[Merge Step1 ERROR] 第 {i+1} 个视频转码失败")
+                        print(f"[Merge Step1 ERROR] 命令: {cmd}")
+                        print(f"[Merge Step1 ERROR] 最后30行stderr:")
+                        for line in stderr_lines[-30:]:
+                            print(f"  {line}")
+                    break
+                
+                print(f"[Merge Step1] 第 {i+1} 个视频转码成功")
+                temp_files.append(temp_file)
+            
+            if not all_success:
+                # 清理临时文件
+                for f in temp_files:
+                    try:
+                        Path(f).unlink(missing_ok=True)
+                    except:
+                        pass
+                self.progress_updated.emit(0, "合并失败（转码阶段）")
+                self.file_finished.emit(0, False, "合并失败")
+                self.status_updated.emit("合并失败")
+                self.all_finished.emit()
+                return
+            
+            # ========== 第二步：使用concat demuxer合并所有临时TS文件 ==========
+            self.status_updated.emit("合并中: 正在合并视频...")
+            self.progress_updated.emit(0, "合并中...")
+            
+            cmd, filelist_path = utils.FFmpegCommand.merge_videos_safe_step2(
+                temp_files, output_path, self.merge_format, actual_use_gpu
+            )
+            
+            # 计算总时长
+            total_duration = 0.0
+            for f in temp_files:
+                d = self._get_video_duration(f)
+                if d > 0:
+                    total_duration += d
+            
+            success, stderr_lines = self._run_ffmpeg_cmd(cmd, total_duration, "合并中")
+            
+            # 清理临时文件
+            for f in temp_files:
+                try:
+                    Path(f).unlink(missing_ok=True)
+                except:
+                    pass
+            if filelist_path:
+                try:
+                    Path(filelist_path).unlink(missing_ok=True)
+                except:
+                    pass
+            
+            if success:
+                self.current_progress_updated.emit(100)
+                self.progress_updated.emit(100, f"合并完成: {Path(output_path).name}")
+                self.file_finished.emit(0, True, f"合并成功: {Path(output_path).name}")
+                self.status_updated.emit("合并完成！")
+            else:
+                if self._is_running:
+                    print(f"[Merge Step2 ERROR] FFmpeg command failed")
+                    print(f"[Merge Step2 ERROR] Command: {cmd}")
+                    print(f"[Merge Step2 ERROR] Last 20 lines of stderr:")
+                    for line in stderr_lines[-20:]:
+                        print(f"  {line}")
+                self.progress_updated.emit(0, "合并失败")
+                self.file_finished.emit(0, False, "合并失败")
+                self.status_updated.emit("合并失败")
+        else:
+            # 非GPU模式（或GPU不可用回退）：使用两步法合并（软件编码）
+            # 两步法更稳定，能处理参数不一致的视频
+            temp_dir = str(output_dir)
+            step1_results = utils.FFmpegCommand.merge_videos_safe_step1(
+                input_files, temp_dir, actual_use_gpu
+            )
+            
+            temp_files = []
+            all_success = True
+            
+            for i, (temp_file, cmd, has_audio) in enumerate(step1_results):
+                if not self._is_running:
+                    break
+                self.status_updated.emit(f"准备中: 转码第 {i+1}/{len(step1_results)} 个视频...")
+                self.progress_updated.emit(0, f"转码中: 第 {i+1}/{len(step1_results)} 个视频")
+                
+                print(f"[Merge Step1] 处理第 {i+1} 个视频: {Path(input_files[i]).name}")
+                print(f"[Merge Step1] 有音频流: {has_audio}")
+                
+                file_duration = self._get_video_duration(input_files[i])
+                success, stderr_lines = self._run_ffmpeg_cmd(
+                    cmd, file_duration, f"转码中: 第 {i+1}/{len(step1_results)} 个视频"
+                )
+                
+                if not success:
+                    all_success = False
+                    if self._is_running:
+                        print(f"[Merge Step1 ERROR] 第 {i+1} 个视频转码失败")
+                        print(f"[Merge Step1 ERROR] 命令: {cmd}")
+                        print(f"[Merge Step1 ERROR] 最后30行stderr:")
+                        for line in stderr_lines[-30:]:
+                            print(f"  {line}")
+                    break
+                
+                print(f"[Merge Step1] 第 {i+1} 个视频转码成功")
+                temp_files.append(temp_file)
+            
+            if not all_success:
+                for f in temp_files:
+                    try:
+                        Path(f).unlink(missing_ok=True)
+                    except:
+                        pass
+                self.progress_updated.emit(0, "合并失败（转码阶段）")
+                self.file_finished.emit(0, False, "合并失败")
+                self.status_updated.emit("合并失败")
+                self.all_finished.emit()
+                return
+            
+            # 第二步：合并
+            self.status_updated.emit("合并中: 正在合并视频...")
+            self.progress_updated.emit(0, "合并中...")
+            
+            cmd, filelist_path = utils.FFmpegCommand.merge_videos_safe_step2(
+                temp_files, output_path, self.merge_format, actual_use_gpu
+            )
+            
+            total_duration = 0.0
+            for f in temp_files:
+                d = self._get_video_duration(f)
+                if d > 0:
+                    total_duration += d
+            
+            success, stderr_lines = self._run_ffmpeg_cmd(cmd, total_duration, "合并中")
+            
+            # 清理临时文件
+            for f in temp_files:
+                try:
+                    Path(f).unlink(missing_ok=True)
+                except:
+                    pass
+            if filelist_path:
+                try:
+                    Path(filelist_path).unlink(missing_ok=True)
+                except:
+                    pass
+            
+            if success:
+                self.current_progress_updated.emit(100)
+                self.progress_updated.emit(100, f"合并完成: {Path(output_path).name}")
+                self.file_finished.emit(0, True, f"合并成功: {Path(output_path).name}")
+                self.status_updated.emit("合并完成！")
+            else:
+                if self._is_running:
+                    print(f"[Merge Step2 ERROR] FFmpeg command failed")
+                    print(f"[Merge Step2 ERROR] Command: {cmd}")
+                    print(f"[Merge Step2 ERROR] Last 20 lines of stderr:")
+                    for line in stderr_lines[-20:]:
+                        print(f"  {line}")
+                self.progress_updated.emit(0, "合并失败")
+                self.file_finished.emit(0, False, "合并失败")
+                self.status_updated.emit("合并失败")
 
         self.all_finished.emit()
 
@@ -762,6 +1173,9 @@ class VideoWorker(QThread):
 
     def _execute_with_progress(self, cmd, input_file):
         import subprocess
+        import threading
+        import time
+
         process = subprocess.Popen(
             cmd,
             shell=True,
@@ -770,25 +1184,52 @@ class VideoWorker(QThread):
             encoding='utf-8',
             errors='replace'
         )
+        self._current_process = process
 
         duration = self._get_video_duration(input_file)
+        stderr_lines = []
+        stderr_lock = threading.Lock()
+
+        def read_stderr():
+            try:
+                for line in process.stderr:
+                    with stderr_lock:
+                        stderr_lines.append(line.strip())
+            except:
+                pass
+
+        reader_thread = threading.Thread(target=read_stderr, daemon=True)
+        reader_thread.start()
 
         while True:
-            line = process.stderr.readline()
-            if not line and process.poll() is not None:
+            if not self._is_running:
+                self._terminate_process(process)
+                reader_thread.join(timeout=1)
                 break
 
-            if 'time=' in line:
-                match = re.search(r'time=(\d+:\d+:\d+\.\d+)', line)
-                if match:
-                    time_str = match.group(1)
-                    current_time = self._parse_time(time_str)
-                    if duration > 0:
-                        percent = min(100, int((current_time / duration) * 100))
-                        self.status_updated.emit(f"处理中... {percent}% ({time_str})")
-                        self.current_progress_updated.emit(percent)
+            if process.poll() is not None:
+                reader_thread.join(timeout=1)
+                break
 
-        return process.returncode == 0
+            with stderr_lock:
+                for line in stderr_lines:
+                    if 'time=' in line:
+                        match = re.search(r'time=(\d+:\d+:\d+\.\d+)', line)
+                        if match:
+                            time_str = match.group(1)
+                            current_time = self._parse_time(time_str)
+                            if duration > 0:
+                                percent = min(100, int((current_time / duration) * 100))
+                                self.status_updated.emit(f"处理中... {percent}% ({time_str})")
+                                self.current_progress_updated.emit(percent)
+
+            time.sleep(0.1)
+
+        self._current_process = None
+        if process.poll() is None:
+            self._terminate_process(process)
+        reader_thread.join(timeout=1)
+        return process.returncode == 0 and self._is_running
 
     def _get_video_duration(self, file_path):
         import subprocess
@@ -843,6 +1284,7 @@ class MainForm(QWidget):
         self.ui.lineEdit_output.setText(config.config.output_folder)
         self.ui.lineEdit_fix_output.setText(config.config.fix_output_folder)
         self.ui.lineEdit_cut_output.setText(config.config.cut_output_folder)
+        self.ui.lineEdit_merge_output.setText(config.config.merge_output_folder)
         self.ui.spinBox_hour.setValue(config.config.cut_hour)
         self.ui.spinBox_minute.setValue(config.config.cut_minute)
         self.ui.spinBox_second.setValue(config.config.cut_second)
@@ -852,6 +1294,23 @@ class MainForm(QWidget):
         self.setMinimumSize(600, 500)
         self.resize(800, 630)
 
+        # 设置停止按钮为红色
+        self.ui.btn_stop.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                border: none;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+            QPushButton:disabled {
+                background-color: #bdc3c7;
+                color: #7f8c8d;
+            }
+        """)
+
     def _setup_connections(self):
         self.ui.btn_add_files.clicked.connect(self._on_add_files)
         self.ui.btn_delete_selected.clicked.connect(self._on_delete_selected)
@@ -859,7 +1318,9 @@ class MainForm(QWidget):
         self.ui.btn_browse_output.clicked.connect(self._on_browse_output)
         self.ui.btn_browse_fix_output.clicked.connect(self._on_browse_fix_output)
         self.ui.btn_browse_cut_output.clicked.connect(self._on_browse_cut_output)
+        self.ui.btn_browse_merge_output.clicked.connect(self._on_browse_merge_output)
         self.ui.btn_start.clicked.connect(self._on_start)
+        self.ui.btn_stop.clicked.connect(self._on_stop)
         self.ui.tabWidget.currentChanged.connect(self._on_tab_changed)
         self.ui.checkBox_overwrite.stateChanged.connect(self._on_overwrite_changed)
         self.ui.checkBox_cut_intro_overwrite.stateChanged.connect(self._on_cut_overwrite_changed)
@@ -979,6 +1440,14 @@ class MainForm(QWidget):
             config.config.cut_output_folder = folder
             self.ui.lineEdit_cut_output.setText(folder)
 
+    def _on_browse_merge_output(self):
+        folder = utils.FileDialog.select_folder(
+            self, "选择输出文件夹", config.config.merge_output_folder
+        )
+        if folder:
+            config.config.merge_output_folder = folder
+            self.ui.lineEdit_merge_output.setText(folder)
+
     def _on_overwrite_changed(self, state):
         is_overwrite = state == Qt.Checked
         self.ui.lineEdit_fix_output.setEnabled(not is_overwrite)
@@ -1019,6 +1488,9 @@ class MainForm(QWidget):
         cut_frame = 0
         cut_overwrite_source = False
         cut_output_folder = ""
+        merge_filename = "合并视频"
+        merge_format = "MP4"
+        merge_use_gpu = False
 
         if config.config.mode == 0:
             target_format = self.ui.comboBox_target.currentText()
@@ -1047,7 +1519,7 @@ class MainForm(QWidget):
             if not overwrite_source and not fix_output_folder:
                 self.ui.label_status.setText("请选择输出文件夹！")
                 return
-        else:  # mode == 2
+        elif config.config.mode == 2:
             cut_hour = self.ui.spinBox_hour.value()
             cut_minute = self.ui.spinBox_minute.value()
             cut_second = self.ui.spinBox_second.value()
@@ -1060,6 +1532,15 @@ class MainForm(QWidget):
                 return
 
             if not cut_overwrite_source and not cut_output_folder:
+                self.ui.label_status.setText("请选择输出文件夹！")
+                return
+        else:  # mode == 3, 合并视频
+            merge_format = self.ui.comboBox_merge_format.currentText()
+            merge_filename = self.ui.lineEdit_merge_filename.text().strip()
+            merge_use_gpu = self.ui.checkBox_merge_gpu.isChecked()
+            if not merge_filename:
+                merge_filename = "合并视频"
+            if not config.config.merge_output_folder:
                 self.ui.label_status.setText("请选择输出文件夹！")
                 return
 
@@ -1077,7 +1558,11 @@ class MainForm(QWidget):
             cut_second,
             cut_frame,
             cut_overwrite_source,
-            cut_output_folder
+            cut_output_folder,
+            merge_filename,
+            merge_format,
+            config.config.merge_output_folder,
+            merge_use_gpu
         )
         self.worker.progress_updated.connect(self._on_progress_updated)
         self.worker.file_finished.connect(self._on_file_finished)
@@ -1107,11 +1592,23 @@ class MainForm(QWidget):
         self.ui.label_status.setText("处理完成！")
         self._set_ui_enabled(True)
 
+    def _on_stop(self):
+        """停止当前任务"""
+        print("[UI] 点击了停止按钮")
+        if hasattr(self, 'worker') and self.worker and self.worker.isRunning():
+            print("[UI] worker 正在运行，调用 stop()...")
+            self.worker.stop()
+            self.ui.label_status.setText("正在停止...")
+            self.ui.btn_stop.setEnabled(False)
+        else:
+            print("[UI] worker 未运行或不存在")
+
     def _set_ui_enabled(self, enabled):
         self.ui.btn_add_files.setEnabled(enabled)
         self.ui.btn_delete_selected.setEnabled(enabled)
         self.ui.btn_clear_list.setEnabled(enabled)
         self.ui.btn_start.setEnabled(enabled)
+        self.ui.btn_stop.setEnabled(not enabled)
         self.ui.btn_browse_output.setEnabled(enabled)
         self.ui.btn_browse_fix_output.setEnabled(enabled)
         self.ui.btn_browse_cut_output.setEnabled(enabled)
@@ -1125,3 +1622,8 @@ class MainForm(QWidget):
         self.ui.spinBox_minute.setEnabled(enabled)
         self.ui.spinBox_second.setEnabled(enabled)
         self.ui.spinBox_frame.setEnabled(enabled)
+        self.ui.comboBox_merge_format.setEnabled(enabled)
+        self.ui.lineEdit_merge_filename.setEnabled(enabled)
+        self.ui.lineEdit_merge_output.setEnabled(enabled)
+        self.ui.btn_browse_merge_output.setEnabled(enabled)
+        self.ui.checkBox_merge_gpu.setEnabled(enabled)
