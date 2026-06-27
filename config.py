@@ -25,17 +25,44 @@ class VideoConfig:
 
     def _set_default_output_folder(self):
         if not self.output_folder:
-            desktop = Path.home() / "Desktop"
-            if desktop.exists():
-                self.output_folder = str(desktop)
+            desktop = self._get_windows_desktop_path()
+            if desktop and Path(desktop).exists():
+                self.output_folder = desktop
             else:
-                self.output_folder = os.path.expanduser("~")
+                # 兜底方案
+                desktop = Path.home() / "Desktop"
+                if desktop.exists():
+                    self.output_folder = str(desktop)
+                else:
+                    self.output_folder = os.path.expanduser("~")
         if not self.fix_output_folder:
             self.fix_output_folder = self.output_folder
         if not self.cut_output_folder:
             self.cut_output_folder = self.output_folder
         if not self.merge_output_folder:
             self.merge_output_folder = self.output_folder
+
+    def _get_windows_desktop_path(self) -> str:
+        """获取Windows用户自定义的桌面路径"""
+        try:
+            import winreg
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+            )
+            try:
+                value, _ = winreg.QueryValueEx(key, "Desktop")
+                # 展开环境变量（如 %USERPROFILE%）
+                expanded = os.path.expandvars(value)
+                # 处理路径中可能存在的引号
+                expanded = expanded.strip('"')
+                if Path(expanded).exists():
+                    return expanded
+            finally:
+                winreg.CloseKey(key)
+        except:
+            pass
+        return ""
 
     @property
     def has_files(self) -> bool:

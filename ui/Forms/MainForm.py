@@ -1285,6 +1285,7 @@ class MainForm(QWidget):
         self.ui.lineEdit_fix_output.setText(config.config.fix_output_folder)
         self.ui.lineEdit_cut_output.setText(config.config.cut_output_folder)
         self.ui.lineEdit_merge_output.setText(config.config.merge_output_folder)
+        self.ui.checkBox_merge_gpu.setChecked(True)
         self.ui.spinBox_hour.setValue(config.config.cut_hour)
         self.ui.spinBox_minute.setValue(config.config.cut_minute)
         self.ui.spinBox_second.setValue(config.config.cut_second)
