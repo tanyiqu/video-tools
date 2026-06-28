@@ -857,6 +857,70 @@ class VideoWorker(QThread):
         except:
             pass
 
+    def _cleanup_merge_temp_files(self, temp_files, filelist_path=None):
+        """统一清理合并视频过程中产生的临时文件"""
+        print(f"[Cleanup] 开始清理临时文件...")
+        cleaned_count = 0
+        
+        # 等待一下，让系统释放文件句柄
+        time.sleep(0.5)
+        
+        # 清理临时 TS 文件
+        for temp_file in temp_files:
+            cleaned = False
+            for retry in range(3):
+                try:
+                    if temp_file and Path(temp_file).exists():
+                        Path(temp_file).unlink()
+                        print(f"[Cleanup] 已删除: {temp_file}")
+                        cleaned_count += 1
+                        cleaned = True
+                        break
+                    else:
+                        break  # 文件不存在，跳过重试
+                except Exception as e:
+                    if retry < 2:
+                        print(f"[Cleanup] 删除失败，准备重试 {temp_file}: {e}")
+                        time.sleep(0.3)
+                    else:
+                        print(f"[Cleanup] 删除失败 {temp_file}: {e}")
+        
+        # 清理 filelist 文件
+        if filelist_path:
+            try:
+                if Path(filelist_path).exists():
+                    Path(filelist_path).unlink()
+                    print(f"[Cleanup] 已删除: {filelist_path}")
+                    cleaned_count += 1
+            except Exception as e:
+                print(f"[Cleanup] 删除失败 {filelist_path}: {e}")
+        
+        # 同时清理可能的 filelist.txt（旧方法使用）
+        for temp_file in temp_files:
+            try:
+                temp_dir = Path(temp_file).parent
+                filelist_txt = temp_dir / "filelist.txt"
+                if filelist_txt.exists():
+                    filelist_txt.unlink()
+                    print(f"[Cleanup] 已删除: {filelist_txt}")
+                    cleaned_count += 1
+            except:
+                pass
+        
+        # 清理输出目录中的 filelist_merge.txt（以防万一）
+        if temp_files:
+            try:
+                output_dir = Path(temp_files[0]).parent
+                filelist_merge = output_dir / "filelist_merge.txt"
+                if filelist_merge.exists():
+                    filelist_merge.unlink()
+                    print(f"[Cleanup] 已删除: {filelist_merge}")
+                    cleaned_count += 1
+            except:
+                pass
+        
+        print(f"[Cleanup] 共清理 {cleaned_count} 个临时文件")
+
     def _process_merge(self):
         """处理合并视频"""
         self.status_updated.emit("正在合并视频...")
@@ -883,10 +947,17 @@ class VideoWorker(QThread):
         actual_use_gpu = self.merge_use_gpu
         if self.merge_use_gpu:
             gpu_available, gpu_msg = utils.FFmpegCommand.check_gpu_available()
-            if not gpu_available:
+            if gpu_available:
+                print(f"[Merge] GPU 加速可用: {gpu_msg}")
+                self.status_updated.emit(gpu_msg)
+            else:
                 print(f"[Merge] GPU 加速不可用: {gpu_msg}")
                 print(f"[Merge] 自动回退到软件编码 (libx264)")
-                self.status_updated.emit(f"GPU加速不可用（{gpu_msg}），使用软件编码...")
+                # 状态栏显示简短提示，详细信息看控制台
+                short_msg = "GPU加速不可用，使用软件编码"
+                if "驱动" in gpu_msg and "版本" in gpu_msg:
+                    short_msg = "GPU驱动版本不匹配，使用软件编码"
+                self.status_updated.emit(short_msg)
                 actual_use_gpu = False
 
         # GPU模式下使用两步法：先转码为统一规格的TS，再合并
@@ -901,8 +972,29 @@ class VideoWorker(QThread):
             all_success = True
             
             for i, (temp_file, cmd, has_audio) in enumerate(step1_results):
+                # 先把 temp_file 添加到列表（即使还没处理完，也可能已经创建了文件）
+                temp_files.append(temp_file)
+                
                 if not self._is_running:
-                    break
+                    # 用户点击停止，确保进程完全终止后再清理
+                    print("[Merge] 用户停止任务，等待进程终止...")
+                    # 确保当前进程已完全终止
+                    if self._current_process:
+                        time.sleep(1)  # 等待进程完全退出
+                        try:
+                            if self._current_process.poll() is None:
+                                self._terminate_process(self._current_process)
+                                time.sleep(0.5)  # 额外等待
+                        except:
+                            pass
+                    print("[Merge] 正在清理临时文件...")
+                    self._cleanup_merge_temp_files(temp_files)
+                    self.progress_updated.emit(0, "任务已停止")
+                    self.file_finished.emit(0, False, "已停止")
+                    self.status_updated.emit("任务已停止")
+                    self.all_finished.emit()
+                    return
+                
                 self.status_updated.emit(f"准备中: 转码第 {i+1}/{len(step1_results)} 个视频...")
                 self.progress_updated.emit(0, f"转码中: 第 {i+1}/{len(step1_results)} 个视频")
                 
@@ -926,15 +1018,11 @@ class VideoWorker(QThread):
                     break
                 
                 print(f"[Merge Step1] 第 {i+1} 个视频转码成功")
-                temp_files.append(temp_file)
+                # temp_file 已经在上面添加到列表了，这里不需要再添加
             
             if not all_success:
                 # 清理临时文件
-                for f in temp_files:
-                    try:
-                        Path(f).unlink(missing_ok=True)
-                    except:
-                        pass
+                self._cleanup_merge_temp_files(temp_files)
                 self.progress_updated.emit(0, "合并失败（转码阶段）")
                 self.file_finished.emit(0, False, "合并失败")
                 self.status_updated.emit("合并失败")
@@ -959,16 +1047,7 @@ class VideoWorker(QThread):
             success, stderr_lines = self._run_ffmpeg_cmd(cmd, total_duration, "合并中")
             
             # 清理临时文件
-            for f in temp_files:
-                try:
-                    Path(f).unlink(missing_ok=True)
-                except:
-                    pass
-            if filelist_path:
-                try:
-                    Path(filelist_path).unlink(missing_ok=True)
-                except:
-                    pass
+            self._cleanup_merge_temp_files(temp_files, filelist_path)
             
             if success:
                 self.current_progress_updated.emit(100)
@@ -997,8 +1076,29 @@ class VideoWorker(QThread):
             all_success = True
             
             for i, (temp_file, cmd, has_audio) in enumerate(step1_results):
+                # 先把 temp_file 添加到列表（即使还没处理完，也可能已经创建了文件）
+                temp_files.append(temp_file)
+                
                 if not self._is_running:
-                    break
+                    # 用户点击停止，确保进程完全终止后再清理
+                    print("[Merge] 用户停止任务，等待进程终止...")
+                    # 确保当前进程已完全终止
+                    if self._current_process:
+                        time.sleep(1)  # 等待进程完全退出
+                        try:
+                            if self._current_process.poll() is None:
+                                self._terminate_process(self._current_process)
+                                time.sleep(0.5)  # 额外等待
+                        except:
+                            pass
+                    print("[Merge] 正在清理临时文件...")
+                    self._cleanup_merge_temp_files(temp_files)
+                    self.progress_updated.emit(0, "任务已停止")
+                    self.file_finished.emit(0, False, "已停止")
+                    self.status_updated.emit("任务已停止")
+                    self.all_finished.emit()
+                    return
+                
                 self.status_updated.emit(f"准备中: 转码第 {i+1}/{len(step1_results)} 个视频...")
                 self.progress_updated.emit(0, f"转码中: 第 {i+1}/{len(step1_results)} 个视频")
                 
@@ -1021,14 +1121,11 @@ class VideoWorker(QThread):
                     break
                 
                 print(f"[Merge Step1] 第 {i+1} 个视频转码成功")
-                temp_files.append(temp_file)
+                # temp_file 已经在上面添加到列表了，这里不需要再添加
             
             if not all_success:
-                for f in temp_files:
-                    try:
-                        Path(f).unlink(missing_ok=True)
-                    except:
-                        pass
+                # 清理临时文件
+                self._cleanup_merge_temp_files(temp_files)
                 self.progress_updated.emit(0, "合并失败（转码阶段）")
                 self.file_finished.emit(0, False, "合并失败")
                 self.status_updated.emit("合并失败")
@@ -1052,16 +1149,7 @@ class VideoWorker(QThread):
             success, stderr_lines = self._run_ffmpeg_cmd(cmd, total_duration, "合并中")
             
             # 清理临时文件
-            for f in temp_files:
-                try:
-                    Path(f).unlink(missing_ok=True)
-                except:
-                    pass
-            if filelist_path:
-                try:
-                    Path(filelist_path).unlink(missing_ok=True)
-                except:
-                    pass
+            self._cleanup_merge_temp_files(temp_files, filelist_path)
             
             if success:
                 self.current_progress_updated.emit(100)

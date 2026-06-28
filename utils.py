@@ -106,38 +106,125 @@ class FFmpegCommand:
         return cmd, str(filelist_path)
 
     @classmethod
+    def get_nvidia_gpu_info(cls) -> Tuple[bool, str, str]:
+        """获取 NVIDIA 显卡信息
+        
+        Returns:
+            (has_nvidia_gpu, gpu_name, driver_version)
+        """
+        try:
+            result = subprocess.run(
+                ['nvidia-smi', '--query-gpu=name,driver_version', '--format=csv,noheader,nounits'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                parts = result.stdout.strip().split(', ')
+                if len(parts) >= 2:
+                    return True, parts[0].strip(), parts[1].strip()
+                elif len(parts) == 1:
+                    return True, parts[0].strip(), ""
+        except:
+            pass
+        return False, "", ""
+
+    @classmethod
+    def get_ffmpeg_version(cls) -> str:
+        """获取 FFmpeg 版本信息"""
+        try:
+            result = subprocess.run(
+                ['ffmpeg', '-version'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10
+            )
+            if result.returncode == 0 and result.stdout:
+                first_line = result.stdout.split('\n')[0]
+                return first_line.strip()
+        except:
+            pass
+        return ""
+
+    @classmethod
     def check_gpu_available(cls) -> Tuple[bool, str]:
         """检测 h264_nvenc 编码器是否可用
         
         Returns:
             (available, message) - 是否可用及原因
         """
+        import re
+        
+        # 第一步：检查是否有 NVIDIA 显卡
+        has_nvidia, gpu_name, driver_version = cls.get_nvidia_gpu_info()
+        
+        if not has_nvidia:
+            return False, "未检测到 NVIDIA 显卡"
+        
+        # 第二步：检查 FFmpeg 是否有 h264_nvenc 编码器
         try:
-            # 使用 ffmpeg -encoders 检查是否有 h264_nvenc
             cmd = 'ffmpeg -encoders 2>&1 | findstr /C:"h264_nvenc"'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='replace')
             
             if 'h264_nvenc' not in result.stdout:
-                return False, "未找到 h264_nvenc 编码器"
-            
-            # 进一步测试编码器是否能实际工作（尝试编码一个空文件）
-            # 使用 nullsrc 生成一帧测试
-            test_cmd = 'ffmpeg -y -f lavfi -i nullsrc=s=128x72:duration=0.1 -c:v h264_nvenc -preset fast -f null - 2>&1'
+                return False, f"FFmpeg 未包含 h264_nvenc 编码器（显卡：{gpu_name}）"
+        except Exception as e:
+            return False, f"检查编码器失败: {str(e)}"
+        
+        # 第三步：尝试多种参数组合测试编码器
+        # 注意：NVENC 要求最小编码尺寸 64x64，使用 1920x1080 确保兼容性
+        test_configs = [
+            # 标准参数（使用大分辨率避免 NVENC 最小尺寸限制）
+            '-preset fast -cq 23',
+            # 不带 preset
+            '-cq 23',
+            # 用 b 替代 cq
+            '-b:v 5M',
+            # 最简参数
+            '',
+        ]
+        
+        last_error = ""
+        for params in test_configs:
+            test_cmd = f'ffmpeg -y -f lavfi -i testsrc=s=1920x1080:duration=0.1 -c:v h264_nvenc {params} -f null - 2>&1'
             test_result = subprocess.run(test_cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='replace')
             
-            if test_result.returncode != 0:
-                # 检查错误信息中是否有驱动版本问题
-                stderr = test_result.stdout + test_result.stderr
-                if 'Driver does not support' in stderr or 'minimum required Nvidia driver' in stderr:
-                    return False, "NVIDIA 驱动版本过低，请升级到 570.0 或更高版本"
-                elif 'No NVENC capable devices found' in stderr or 'Cannot allocate memory' in stderr:
-                    return False, "未找到支持 NVENC 的 NVIDIA 显卡"
-                else:
-                    return False, "h264_nvenc 编码器无法正常工作"
+            if test_result.returncode == 0:
+                return True, f"GPU 加速可用（{gpu_name}）"
             
-            return True, "GPU 加速可用"
-        except Exception as e:
-            return False, f"检测失败: {str(e)}"
+            stderr = test_result.stdout + test_result.stderr
+            last_error = stderr
+            
+            # 如果是驱动版本问题，给出详细提示
+            if 'Driver does not support' in stderr or 'minimum required Nvidia driver' in stderr:
+                required_match = re.search(r'Required:\s*([\d.]+)', stderr)
+                found_match = re.search(r'Found:\s*([\d.]+)', stderr)
+                min_driver_match = re.search(r'minimum required Nvidia driver for nvenc is\s*([\d.]+)', stderr)
+                
+                ffmpeg_ver = cls.get_ffmpeg_version()
+                
+                msg_parts = [f"显卡 {gpu_name} 支持 NVENC"]
+                if driver_version:
+                    msg_parts.append(f"，当前驱动 {driver_version}")
+                if min_driver_match:
+                    msg_parts.append(f"，但 FFmpeg 要求驱动 {min_driver_match.group(1)}+")
+                if found_match and required_match:
+                    msg_parts.append(f"\n（NVENC API：需要 {required_match.group(1)}，当前 {found_match.group(1)}）")
+                
+                msg_parts.append("\n\n解决方案：")
+                msg_parts.append("1. 升级 NVIDIA 显卡驱动到最新版本")
+                msg_parts.append("2. 或使用较旧版本的 FFmpeg（6.x/7.x 系列）")
+                
+                if ffmpeg_ver:
+                    msg_parts.append(f"\n当前 FFmpeg：{ffmpeg_ver}")
+                
+                return False, ''.join(msg_parts)
+        
+        # 所有参数都失败了，检查具体原因
+        if 'No NVENC capable devices found' in last_error:
+            return False, f"未找到支持 NVENC 的设备（{gpu_name}）"
+        elif 'Cannot allocate memory' in last_error:
+            return False, "显卡显存不足"
+        elif 'OpenEncodeSessionEx failed' in last_error:
+            return False, f"NVENC 会话打开失败（{gpu_name}），可能是驱动问题"
+        else:
+            return False, f"h264_nvenc 编码器无法正常工作（{gpu_name}）"
 
     @classmethod
     def merge_videos_safe(cls, input_files: List[str], output_path: str, target_format: str, use_gpu: bool = False) -> Tuple[str, str]:
