@@ -23,6 +23,21 @@ class VideoConfig:
     def __post_init__(self):
         self._set_default_output_folder()
 
+    @staticmethod
+    def get_ffmpeg_path() -> str:
+        """获取 ffmpeg 程序路径（支持自定义 Encoder 文件夹）"""
+        # 获取当前脚本所在目录
+        current_dir = Path(__file__).parent
+        encoder_dir = current_dir / "Encoder"
+        
+        # 检查 Encoder 文件夹中是否有 ffmpeg.exe
+        ffmpeg_in_encoder = encoder_dir / "ffmpeg.exe"
+        if ffmpeg_in_encoder.exists():
+            return str(ffmpeg_in_encoder)
+        
+        # 如果没有，返回系统 PATH 中的 ffmpeg
+        return "ffmpeg"
+
     def _set_default_output_folder(self):
         if not self.output_folder:
             desktop = self._get_windows_desktop_path()

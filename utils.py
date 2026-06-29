@@ -6,6 +6,8 @@ from typing import Optional, Tuple, List
 from PyQt5.QtWidgets import QFileDialog
 from PyQt5.QtCore import QFileInfo
 
+import config
+
 
 class FileDialog:
     @staticmethod
@@ -25,33 +27,39 @@ class FileDialog:
 
 
 class FFmpegCommand:
-    COPY_CODEC_TEMPLATE = 'ffmpeg -y -i "{input}" -vcodec copy -acodec copy "{output}"'
-    FIX_MP4_INDEX_TEMPLATE = 'ffmpeg -y -i "{input}" -c:v copy -c:a copy "{output}"'
-
     SUPPORTED_FORMATS = ['mp4', 'ts', 'flv', 'mkv']
 
     @classmethod
+    def _get_ffmpeg(cls) -> str:
+        """获取 ffmpeg 路径"""
+        return config.VideoConfig.get_ffmpeg_path()
+
+    @classmethod
     def generate(cls, input_path: str, target_format: str) -> Optional[str]:
+        ffmpeg = cls._get_ffmpeg()
         input_file = Path(input_path)
         output_path = str(input_file.parent / f"{input_file.stem}.{target_format.lower()}")
-        return cls.COPY_CODEC_TEMPLATE.format(input=input_path, output=output_path)
+        return f'{ffmpeg} -y -i "{input_path}" -vcodec copy -acodec copy "{output_path}"'
 
     @classmethod
     def generate_with_output_dir(cls, input_path: str, target_format: str, output_dir: str) -> Optional[str]:
+        ffmpeg = cls._get_ffmpeg()
         input_file = Path(input_path)
         output_dir_path = Path(output_dir)
         output_dir_path.mkdir(parents=True, exist_ok=True)
         output_path = str(output_dir_path / f"{input_file.stem}.{target_format.lower()}")
-        return cls.COPY_CODEC_TEMPLATE.format(input=input_path, output=output_path)
+        return f'{ffmpeg} -y -i "{input_path}" -vcodec copy -acodec copy "{output_path}"'
 
     @classmethod
     def fix_mp4_index(cls, input_path: str, output_path: str) -> str:
-        return cls.FIX_MP4_INDEX_TEMPLATE.format(input=input_path, output=output_path)
+        ffmpeg = cls._get_ffmpeg()
+        return f'{ffmpeg} -y -i "{input_path}" -c:v copy -c:a copy "{output_path}"'
 
     @classmethod
     def cut_intro(cls, input_path: str, output_path: str, hours: int, minutes: int, seconds: int, frames: int) -> str:
+        ffmpeg = cls._get_ffmpeg()
         time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{frames:03d}"
-        return f'ffmpeg -i "{input_path}" -ss {time_str} -c:v h264_nvenc -preset fast -cq 18 -c:a aac -b:a 192k -async 1 -avoid_negative_ts make_zero -y "{output_path}"'
+        return f'{ffmpeg} -i "{input_path}" -ss {time_str} -c:v h264_nvenc -preset fast -cq 18 -c:a aac -b:a 192k -async 1 -avoid_negative_ts make_zero -y "{output_path}"'
 
     @classmethod
     def merge_videos(cls, input_files: List[str], output_path: str, target_format: str, use_gpu: bool = False) -> Tuple[str, str]:
@@ -63,6 +71,8 @@ class FFmpegCommand:
             target_format: 目标格式 (MP4/TS/FLV/MKV)
             use_gpu: 是否使用NVIDIA GPU加速
         """
+        ffmpeg = cls._get_ffmpeg()
+        
         # 创建临时文件列表
         temp_dir = Path(output_path).parent
         filelist_path = temp_dir / "filelist.txt"
@@ -84,24 +94,24 @@ class FFmpegCommand:
         # 根据目标格式选择编码参数
         if target_format.lower() == 'mp4':
             if use_gpu:
-                cmd = f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -preset fast -cq 23 -c:a {audio_encoder} -b:a 192k -strict experimental "{output_path}"'
+                cmd = f'{ffmpeg} -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -preset fast -cq 23 -c:a {audio_encoder} -b:a 192k -strict experimental "{output_path}"'
             else:
-                cmd = f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -crf 23 -preset fast -c:a {audio_encoder} -b:a 192k -strict experimental "{output_path}"'
+                cmd = f'{ffmpeg} -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -crf 23 -preset fast -c:a {audio_encoder} -b:a 192k -strict experimental "{output_path}"'
         elif target_format.lower() == 'ts':
             # TS格式使用mpeg2video
-            cmd = f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" -c:v mpeg2video -crf 23 -c:a mp2 -b:a 192k "{output_path}"'
+            cmd = f'{ffmpeg} -y -f concat -safe 0 -i "{filelist_path}" -c:v mpeg2video -crf 23 -c:a mp2 -b:a 192k "{output_path}"'
         elif target_format.lower() == 'flv':
             if use_gpu:
-                cmd = f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -preset fast -cq 23 -c:a {audio_encoder} -strict experimental "{output_path}"'
+                cmd = f'{ffmpeg} -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -preset fast -cq 23 -c:a {audio_encoder} -strict experimental "{output_path}"'
             else:
-                cmd = f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -crf 23 -preset fast -c:a {audio_encoder} -strict experimental "{output_path}"'
+                cmd = f'{ffmpeg} -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -crf 23 -preset fast -c:a {audio_encoder} -strict experimental "{output_path}"'
         elif target_format.lower() == 'mkv':
             if use_gpu:
-                cmd = f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -preset fast -cq 23 -c:a {audio_encoder} "{output_path}"'
+                cmd = f'{ffmpeg} -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -preset fast -cq 23 -c:a {audio_encoder} "{output_path}"'
             else:
-                cmd = f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -crf 23 -preset fast -c:a {audio_encoder} "{output_path}"'
+                cmd = f'{ffmpeg} -y -f concat -safe 0 -i "{filelist_path}" -c:v {video_encoder} -crf 23 -preset fast -c:a {audio_encoder} "{output_path}"'
         else:
-            cmd = f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" -c copy "{output_path}"'
+            cmd = f'{ffmpeg} -y -f concat -safe 0 -i "{filelist_path}" -c copy "{output_path}"'
 
         return cmd, str(filelist_path)
 
@@ -131,8 +141,10 @@ class FFmpegCommand:
     def get_ffmpeg_version(cls) -> str:
         """获取 FFmpeg 版本信息"""
         try:
+            ffmpeg = cls._get_ffmpeg()
+            # 使用列表形式避免 shell 注入，同时支持带路径的 ffmpeg
             result = subprocess.run(
-                ['ffmpeg', '-version'],
+                [ffmpeg, '-version'],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10
             )
             if result.returncode == 0 and result.stdout:
@@ -159,7 +171,9 @@ class FFmpegCommand:
         
         # 第二步：检查 FFmpeg 是否有 h264_nvenc 编码器
         try:
-            cmd = 'ffmpeg -encoders 2>&1 | findstr /C:"h264_nvenc"'
+            ffmpeg = cls._get_ffmpeg()
+            # 使用 shell=True 以支持 findstr 命令和带路径的 ffmpeg
+            cmd = f'"{ffmpeg}" -encoders 2>&1 | findstr /C:"h264_nvenc"'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='replace')
             
             if 'h264_nvenc' not in result.stdout:
@@ -182,7 +196,8 @@ class FFmpegCommand:
         
         last_error = ""
         for params in test_configs:
-            test_cmd = f'ffmpeg -y -f lavfi -i testsrc=s=1920x1080:duration=0.1 -c:v h264_nvenc {params} -f null - 2>&1'
+            ffmpeg = cls._get_ffmpeg()
+            test_cmd = f'"{ffmpeg}" -y -f lavfi -i testsrc=s=1920x1080:duration=0.1 -c:v h264_nvenc {params} -f null - 2>&1'
             test_result = subprocess.run(test_cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='replace')
             
             if test_result.returncode == 0:
@@ -235,10 +250,18 @@ class FFmpegCommand:
         return cls.merge_videos_safe_step1(input_files, output_path, target_format, use_gpu)
 
     @classmethod
+    def _get_ffprobe(cls) -> str:
+        """获取 ffprobe 程序路径"""
+        ffmpeg_path = cls._get_ffmpeg()
+        # 将 ffmpeg.exe 替换为 ffprobe.exe
+        return ffmpeg_path.replace('ffmpeg.exe', 'ffprobe.exe').replace('ffmpeg', 'ffprobe')
+
+    @classmethod
     def has_audio_stream(cls, file_path: str) -> bool:
         """检测视频文件是否有音频流"""
         try:
-            cmd = f'ffprobe -v error -select_streams a -show_entries stream=codec_type -of default=noprint_wrappers=1:nokey=1 "{file_path}"'
+            ffprobe = cls._get_ffprobe()
+            cmd = f'"{ffprobe}" -v error -select_streams a -show_entries stream=codec_type -of default=noprint_wrappers=1:nokey=1 "{file_path}"'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='replace')
             return result.returncode == 0 and result.stdout.strip() == 'audio'
         except:
@@ -251,6 +274,8 @@ class FFmpegCommand:
         Returns:
             List of (temp_file_path, ffmpeg_cmd, has_audio) 对，按顺序
         """
+        ffmpeg = cls._get_ffmpeg()
+        
         if use_gpu:
             video_encoder = 'h264_nvenc'
         else:
@@ -266,7 +291,7 @@ class FFmpegCommand:
             if has_audio:
                 # 有音频流：正常转码
                 cmd = (
-                    f'ffmpeg -y -i "{escaped_path}" '
+                    f'"{ffmpeg}" -y -i "{escaped_path}" '
                     f'-c:v {video_encoder} -preset fast -cq 23 '
                     f'-pix_fmt yuv420p -r 30 '
                     f'-c:a aac -b:a 192k -ar 48000 -ac 2 '
@@ -276,7 +301,7 @@ class FFmpegCommand:
             else:
                 # 没有音频流：生成静音音频
                 cmd = (
-                    f'ffmpeg -y -i "{escaped_path}" '
+                    f'"{ffmpeg}" -y -i "{escaped_path}" '
                     f'-f lavfi -i anullsrc=r=48000:cl=stereo '
                     f'-c:v {video_encoder} -preset fast -cq 23 '
                     f'-pix_fmt yuv420p -r 30 '
@@ -297,6 +322,8 @@ class FFmpegCommand:
         Returns:
             (cmd, filelist_path)
         """
+        ffmpeg = cls._get_ffmpeg()
+        
         if use_gpu:
             video_encoder = 'h264_nvenc'
         else:
@@ -314,34 +341,34 @@ class FFmpegCommand:
         # 根据目标格式选择编码
         if target_format.lower() == 'mp4':
             cmd = (
-                f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" '
+                f'"{ffmpeg}" -y -f concat -safe 0 -i "{filelist_path}" '
                 f'-c:v {video_encoder} -preset fast -cq 23 '
                 f'-c:a aac -b:a 192k -strict experimental '
                 f'"{output_path}"'
             )
         elif target_format.lower() == 'ts':
             cmd = (
-                f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" '
+                f'"{ffmpeg}" -y -f concat -safe 0 -i "{filelist_path}" '
                 f'-c:v mpeg2video -crf 23 '
                 f'-c:a mp2 -b:a 192k '
                 f'"{output_path}"'
             )
         elif target_format.lower() == 'flv':
             cmd = (
-                f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" '
+                f'"{ffmpeg}" -y -f concat -safe 0 -i "{filelist_path}" '
                 f'-c:v {video_encoder} -preset fast -cq 23 '
                 f'-c:a aac -strict experimental '
                 f'"{output_path}"'
             )
         elif target_format.lower() == 'mkv':
             cmd = (
-                f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" '
+                f'"{ffmpeg}" -y -f concat -safe 0 -i "{filelist_path}" '
                 f'-c:v {video_encoder} -preset fast -cq 23 '
                 f'-c:a aac '
                 f'"{output_path}"'
             )
         else:
-            cmd = f'ffmpeg -y -f concat -safe 0 -i "{filelist_path}" -c copy "{output_path}"'
+            cmd = f'"{ffmpeg}" -y -f concat -safe 0 -i "{filelist_path}" -c copy "{output_path}"'
         
         return cmd, str(filelist_path)
 

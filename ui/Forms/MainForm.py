@@ -711,6 +711,15 @@ class VideoWorker(QThread):
         import subprocess
         import threading
         import time
+        import re
+
+        # 在命令中插入 -progress pipe:2 参数，确保进度信息输出到 stderr
+        # 找到 ffmpeg 命令后的第一个 -i 参数，在它之前插入 -progress
+        # 简单方法：在 " -y " 后面插入
+        if ' -y ' in cmd:
+            cmd = cmd.replace(' -y ', ' -y -progress pipe:2 ', 1)
+        elif '" -y ' in cmd:
+            cmd = cmd.replace('" -y ', '" -y -progress pipe:2 ', 1)
 
         process = subprocess.Popen(
             cmd,
@@ -724,53 +733,75 @@ class VideoWorker(QThread):
 
         last_percent = 0
         stderr_lines = []
-        stderr_lock = threading.Lock()
+        lines_lock = threading.Lock()
+        last_processed_line = 0
 
         def read_stderr():
             try:
                 for line in process.stderr:
-                    with stderr_lock:
+                    with lines_lock:
                         stderr_lines.append(line.strip())
             except:
                 pass
 
         # 启动线程读取 stderr
-        reader_thread = threading.Thread(target=read_stderr, daemon=True)
-        reader_thread.start()
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread.start()
+
+        # 支持多种时间格式
+        # 格式1: out_time_ms=1234567 (微秒) - 来自 -progress
+        # 格式2: time=00:01:23.45 - 来自默认 stats
+        out_time_ms_pattern = re.compile(r'out_time_ms=(\d+)')
+        time_pattern = re.compile(r'time=(\d+:\d+:\d+\.\d+|\d+:\d+\.\d+|\d+\.\d+|\d+)')
 
         while True:
             # 检查停止标志
             if not self._is_running:
                 self._terminate_process(process)
-                reader_thread.join(timeout=1)
+                stderr_thread.join(timeout=1)
                 break
 
             # 检查进程是否结束
             if process.poll() is not None:
-                reader_thread.join(timeout=1)
+                stderr_thread.join(timeout=1)
                 break
 
-            # 解析进度（从已读取的行中）
-            with stderr_lock:
-                for line in stderr_lines:
-                    if 'time=' in line and duration > 0 and last_percent < 99:
-                        try:
-                            time_str = line.split('time=')[1].split()[0]
-                            parts = time_str.split(':')
-                            if len(parts) == 3:
-                                current_time = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
-                            elif len(parts) == 2:
-                                current_time = float(parts[0]) * 60 + float(parts[1])
-                            else:
-                                current_time = float(parts[0])
-                            
+            # 解析进度
+            with lines_lock:
+                new_lines = stderr_lines[last_processed_line:]
+                last_processed_line = len(stderr_lines)
+
+            for line in new_lines:
+                if duration > 0 and last_percent < 99:
+                    try:
+                        current_time = None
+                        
+                        # 优先匹配 out_time_ms（来自 -progress，更可靠）
+                        match = out_time_ms_pattern.search(line)
+                        if match:
+                            out_time_ms = int(match.group(1))
+                            current_time = out_time_ms / 1000000.0
+                        else:
+                            # 其次匹配 time= 格式
+                            match = time_pattern.search(line)
+                            if match:
+                                time_str = match.group(1)
+                                parts = time_str.split(':')
+                                if len(parts) == 3:
+                                    current_time = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+                                elif len(parts) == 2:
+                                    current_time = float(parts[0]) * 60 + float(parts[1])
+                                else:
+                                    current_time = float(parts[0])
+                        
+                        if current_time is not None:
                             percent = min(int((current_time / duration) * 100), 99)
                             if percent > last_percent:
                                 last_percent = percent
                                 self.current_progress_updated.emit(percent)
                                 self.progress_updated.emit(percent, f"{progress_prefix} ({percent}%)")
-                        except (ValueError, IndexError):
-                            pass
+                    except (ValueError, IndexError):
+                        pass
 
             time.sleep(0.1)
 
@@ -780,7 +811,7 @@ class VideoWorker(QThread):
             self._terminate_process(process)
         
         # 等待线程结束
-        reader_thread.join(timeout=1)
+        stderr_thread.join(timeout=1)
         
         success = process.returncode == 0 and self._is_running
         return success, stderr_lines
@@ -1210,7 +1241,9 @@ class VideoWorker(QThread):
                         if input_path.exists():
                             input_path.rename(backup_path)
                         temp_file.rename(input_path)
-                        Path(backup_path).unlink(missing_ok=True)
+                        backup_file = Path(backup_path)
+                        if backup_file.exists():
+                            backup_file.unlink()
                     except Exception as e:
                         print(f"文件替换操作: {e}")
                         try:
@@ -1249,7 +1282,9 @@ class VideoWorker(QThread):
                         if input_path.exists():
                             input_path.rename(backup_path)
                         temp_file.rename(input_path)
-                        Path(backup_path).unlink(missing_ok=True)
+                        backup_file = Path(backup_path)
+                        if backup_file.exists():
+                            backup_file.unlink()
                     except Exception as e:
                         print(f"文件替换操作: {e}")
                         try:
@@ -1322,7 +1357,8 @@ class VideoWorker(QThread):
     def _get_video_duration(self, file_path):
         import subprocess
         try:
-            cmd = f'ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "{file_path}"'
+            ffprobe_path = config.VideoConfig.get_ffmpeg_path().replace('ffmpeg.exe', 'ffprobe.exe').replace('ffmpeg', 'ffprobe')
+            cmd = f'"{ffprobe_path}" -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "{file_path}"'
             result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding='utf-8', errors='replace')
             if result.returncode == 0:
                 return float(result.stdout.strip())
